@@ -7,6 +7,9 @@ from sklearn.pipeline import Pipeline
 import numpy as np
 import pandas as pd
 import os
+import pickle
+import json
+from datetime import datetime
 
 # Try to import SMOTE for class balancing
 try:
@@ -146,6 +149,19 @@ def train_model(csv_path="dataset.csv"):
 
         # Store scaler for prediction
         model.scaler = scaler
+        
+        # 💾 Save model to disk
+        metrics = {
+            "accuracy": float(acc),
+            "f1_weighted": float(f1_weighted),
+            "f1_macro": float(f1_macro),
+            "precision": float(precision),
+            "recall": float(recall),
+            "samples_trained": len(df),
+            "features": MODEL_FEATURES
+        }
+        save_model(model, metrics)
+        
         return model, True
 
     except Exception as e:
@@ -186,3 +202,138 @@ def predict(model, features, is_trained):
     except Exception as e:
         print("⚠️ Prediction error:", e)
         return None, 0.0
+
+
+def save_model(model, metrics, model_dir="models"):
+    """Save trained model and metadata to disk"""
+    try:
+        # Create models directory if it doesn't exist
+        os.makedirs(model_dir, exist_ok=True)
+        
+        # Generate version timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        version = f"model_v{timestamp}"
+        
+        # Save model pickle
+        model_path = os.path.join(model_dir, f"{version}.pkl")
+        with open(model_path, 'wb') as f:
+            pickle.dump(model, f)
+        print(f"✅ Model saved: {model_path}")
+        
+        # Save metadata
+        metadata = {
+            "version": version,
+            "timestamp": timestamp,
+            "metrics": metrics,
+            "features": MODEL_FEATURES,
+            "model_type": "RandomForestClassifier"
+        }
+        metadata_path = os.path.join(model_dir, f"{version}_metadata.json")
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        print(f"✅ Metadata saved: {metadata_path}")
+        
+        # Update registry
+        update_registry(version, metadata, model_dir)
+        
+    except Exception as e:
+        print(f"⚠️ Failed to save model: {e}")
+
+
+def load_model(model_dir="models", version=None):
+    """Load trained model from disk"""
+    try:
+        # Create models directory if it doesn't exist
+        os.makedirs(model_dir, exist_ok=True)
+        
+        if version is None:
+            # Load latest model
+            registry_path = os.path.join(model_dir, "registry.json")
+            if not os.path.exists(registry_path):
+                print("ℹ️  No saved model found")
+                return None, False
+            
+            with open(registry_path, 'r') as f:
+                registry = json.load(f)
+            
+            if not registry['versions']:
+                print("ℹ️  No saved model found")
+                return None, False
+            
+            # Get latest version
+            latest = registry['versions'][-1]
+            version = latest['version']
+            print(f"✅ Loading latest model: {version}")
+            print(f"   Accuracy: {latest['metrics']['accuracy']:.4f}")
+        
+        model_path = os.path.join(model_dir, f"{version}.pkl")
+        if not os.path.exists(model_path):
+            print(f"⚠️ Model file not found: {model_path}")
+            return None, False
+        
+        with open(model_path, 'rb') as f:
+            model = pickle.load(f)
+        
+        print(f"✅ Model loaded: {version}")
+        return model, True
+        
+    except Exception as e:
+        print(f"⚠️ Failed to load model: {e}")
+        return None, False
+
+
+def update_registry(version, metadata, model_dir="models"):
+    """Update model registry with new version info"""
+    try:
+        registry_path = os.path.join(model_dir, "registry.json")
+        
+        # Load existing registry or create new
+        if os.path.exists(registry_path):
+            with open(registry_path, 'r') as f:
+                registry = json.load(f)
+        else:
+            registry = {"versions": []}
+        
+        # Add new version
+        registry_entry = {
+            "version": version,
+            "timestamp": metadata["timestamp"],
+            "metrics": metadata["metrics"]
+        }
+        registry['versions'].append(registry_entry)
+        
+        # Save updated registry
+        with open(registry_path, 'w') as f:
+            json.dump(registry, f, indent=2)
+        
+        print(f"✅ Registry updated with {len(registry['versions'])} models")
+        
+    except Exception as e:
+        print(f"⚠️ Failed to update registry: {e}")
+
+
+def list_models(model_dir="models"):
+    """List all saved model versions"""
+    try:
+        registry_path = os.path.join(model_dir, "registry.json")
+        if not os.path.exists(registry_path):
+            print("ℹ️  No models saved yet")
+            return []
+        
+        with open(registry_path, 'r') as f:
+            registry = json.load(f)
+        
+        if not registry['versions']:
+            print("ℹ️  No models saved yet")
+            return []
+        
+        print(f"\n📦 Model Registry ({len(registry['versions'])} versions):")
+        for i, entry in enumerate(registry['versions'], 1):
+            acc = entry['metrics']['accuracy']
+            print(f"   {i}. {entry['version']} | Accuracy: {acc:.4f} | {entry['timestamp']}")
+        
+        return registry['versions']
+        
+    except Exception as e:
+        print(f"⚠️ Failed to list models: {e}")
+        return []

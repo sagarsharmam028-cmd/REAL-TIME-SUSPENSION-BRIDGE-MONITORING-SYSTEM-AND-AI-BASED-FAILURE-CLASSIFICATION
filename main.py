@@ -1,6 +1,6 @@
 from live_data import get_live_data
 from features import extract_features_live
-from model import train_model, predict
+from model import train_model, predict, load_model, list_models
 from simulation.twin import run_simulation
 import csv
 import os
@@ -9,8 +9,17 @@ import os
 buffer = []
 BUFFER_SIZE = 20
 
-# 🔹 Train model (if dataset available)
-model, is_trained = train_model()
+# 🔹 Try to load existing model first, otherwise train new one
+print("🔍 Checking for saved models...")
+model, is_trained = load_model()
+
+if not is_trained:
+    print("📚 No saved model found. Training new model...\n")
+    model, is_trained = train_model()
+
+# 🔹 List all available models
+if is_trained:
+    list_models()
 
 print("✅ System started. Live monitoring running...\n")
 
