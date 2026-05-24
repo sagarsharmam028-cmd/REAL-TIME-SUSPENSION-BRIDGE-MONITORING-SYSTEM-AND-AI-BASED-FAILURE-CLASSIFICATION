@@ -25,10 +25,28 @@ from datetime import datetime
 import plotly.graph_objects as go
 
 # Import our robust hardware pipeline, features extraction, and model modules
-from live_data import get_live_data, USE_REAL, serial_port_name, send_serial_command
+import live_data
+from live_data import get_live_data, serial_port_name, send_serial_command
 from features import extract_features_live
 from model import load_model, predict, list_models, MODEL_FEATURES
 from simulation.twin import run_simulation
+
+# ============================================
+# PERSISTENT STORAGE & CALIBRATION CACHING
+# ============================================
+@st.cache_resource
+def get_persistent_history():
+    return []
+
+@st.cache_resource
+def get_calibration_state():
+    return {
+        "baseline_distance": 71.5,
+        "is_calibrated": False
+    }
+
+plotly_history = get_persistent_history()
+calib_state = get_calibration_state()
 
 # ============================================
 # PAGE SETUP & STYLING
@@ -153,11 +171,33 @@ except Exception as e:
 
 # Hardware Status Sidebar HUD
 st.sidebar.divider()
-st.sidebar.markdown("### 🔌 Hardware Connection")
-if USE_REAL:
+st.sidebar.markdown("### 🔌 Telemetry Controls")
+
+# Manual selector for simulated data override
+data_source = st.sidebar.selectbox(
+    "Data Source Mode",
+    ["🔌 Real Hardware (Auto-detect)", "💻 Simulated Mode"],
+    index=1 if live_data.FORCE_SIMULATION else 0,
+    help="Select whether to read from physical USB serial hardware or generate realistic simulated physics events."
+)
+
+# Detect dynamic mode switch to reset baseline calibration appropriately
+new_force_sim = (data_source == "💻 Simulated Mode")
+if new_force_sim != live_data.FORCE_SIMULATION:
+    live_data.FORCE_SIMULATION = new_force_sim
+    if new_force_sim:
+        calib_state["baseline_distance"] = 3.0  # Simulated zero-load height
+        calib_state["is_calibrated"] = True
+        st.toast("💻 Switched to Simulated Mode. Baseline set to 3.0 cm.", icon="💻")
+    else:
+        calib_state["baseline_distance"] = 71.5  # Physical default height
+        calib_state["is_calibrated"] = False  # Triggers automatic tare calibration on first read
+        st.toast("🔌 Switched to Real Hardware. Baseline will auto-calibrate on next read.", icon="🔌")
+
+if live_data.USE_REAL:
     st.sidebar.success(f"Connected: COM / Serial Port Active")
 else:
-    st.sidebar.info("Simulated Mode (No Serial hardware detected)")
+    st.sidebar.info("Simulated Mode Active")
 
 # Add manual baseline calibration button
 if st.sidebar.button("🔌 Calibrate Sensor Baseline (Tare)", help="Click when the bridge is completely empty to set the baseline distance."):
@@ -390,22 +430,7 @@ def draw_bridge_3d_html(deflection, load, status, elements_data_json):
     """
     return html_content
 
-# ============================================
-# PERSISTENT STORAGE & CALIBRATION CACHING
-# ============================================
-@st.cache_resource
-def get_persistent_history():
-    return []
 
-@st.cache_resource
-def get_calibration_state():
-    return {
-        "baseline_distance": 71.5,
-        "is_calibrated": False
-    }
-
-plotly_history = get_persistent_history()
-calib_state = get_calibration_state()
 
 # ============================================
 # MAIN DASHBOARD TABS

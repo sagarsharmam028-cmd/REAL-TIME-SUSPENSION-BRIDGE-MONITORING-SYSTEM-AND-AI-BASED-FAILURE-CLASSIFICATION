@@ -57,7 +57,7 @@ void loop() {
   // 🔹 LOAD CELL (stable filtering)
   float rawWeight = scale.get_units(20);
 
-  if (abs(rawWeight) < 5) rawWeight = 0;
+  if (abs(rawWeight) < 0.05) rawWeight = 0;
 
   static float weight = 0;
   weight = 0.8 * weight + 0.2 * rawWeight;

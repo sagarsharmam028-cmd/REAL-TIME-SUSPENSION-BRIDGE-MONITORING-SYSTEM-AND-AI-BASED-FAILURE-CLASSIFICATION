@@ -23,7 +23,8 @@ MPU6050_ACCEL_SCALE = 16384.0
 data_queue = queue.Queue(maxsize=100)
 reader_thread = None
 stop_event = threading.Event()
-USE_REAL = True
+USE_REAL = False  # Starts False, dynamically set True upon successful connection
+FORCE_SIMULATION = False  # Allows the UI to force simulated mode manually
 serial_port_name = "COM3"  # Default fallback
 
 # Global variable for holding the active serial connection to support bidirectional control
@@ -56,37 +57,65 @@ def find_arduino_port():
 
 def serial_reader_worker():
     """Background worker thread that handles serial port polling, reading, and auto-reconnection"""
-    global USE_REAL, serial_port_name, active_serial_conn
+    global USE_REAL, serial_port_name, active_serial_conn, FORCE_SIMULATION
     print("🚀 Asynchronous Serial Thread Started.")
     
+    last_conn_attempt = 0.0
+    retry_interval = 10.0  # Attempt reconnection every 10 seconds, not blocking in between
+    
     while not stop_event.is_set():
-        if active_serial_conn is None:
-            # Attempt to discover port
-            discovered_port = find_arduino_port()
-            port_to_try = discovered_port if discovered_port else serial_port_name
-            
-            if not HAS_SERIAL or not port_to_try:
-                # Sleep and continue to generate simulated data below
-                USE_REAL = False
-                time.sleep(2)
-            else:
+        # Handle Force Simulation Override
+        if FORCE_SIMULATION:
+            USE_REAL = False
+            if active_serial_conn:
                 try:
-                    print(f"🔌 Attempting serial connection to {port_to_try} at 115200 baud...")
-                    active_serial_conn = serial.Serial(port_to_try, 115200, timeout=1)
-                    print(f"✅ Serial connected successfully on {port_to_try}")
-                    USE_REAL = True
-                except Exception as e:
-                    print(f"❌ Serial connection to {port_to_try} failed: {e}")
-                    active_serial_conn = None
+                    active_serial_conn.close()
+                except:
+                    pass
+                active_serial_conn = None
+            
+            # Generate simulated data at 10Hz
+            data = simulate_data()
+            try:
+                if data_queue.full():
+                    data_queue.get_nowait()
+                data_queue.put_nowait(data)
+            except queue.Full:
+                pass
+            time.sleep(0.1)
+            continue
+
+        if active_serial_conn is None:
+            now = time.time()
+            if now - last_conn_attempt > retry_interval:
+                last_conn_attempt = now
+                # Attempt to discover port
+                discovered_port = find_arduino_port()
+                port_to_try = discovered_port if discovered_port else serial_port_name
+                
+                if HAS_SERIAL and port_to_try:
+                    try:
+                        print(f"🔌 Attempting serial connection to {port_to_try} at 115200 baud...")
+                        active_serial_conn = serial.Serial(port_to_try, 115200, timeout=0.1)
+                        print(f"✅ Serial connected successfully on {port_to_try}")
+                        USE_REAL = True
+                    except Exception as e:
+                        print(f"❌ Serial connection to {port_to_try} failed: {e}")
+                        active_serial_conn = None
+                        USE_REAL = False
+                else:
                     USE_REAL = False
-                    time.sleep(5)  # Wait 5 seconds before retrying to prevent CPU spinning
-                    continue
+            else:
+                # Not time to retry yet
+                USE_REAL = False
         
         # If we have a connected serial port
         if active_serial_conn and active_serial_conn.is_open:
             try:
                 line = active_serial_conn.readline().decode(errors="ignore").strip()
                 if not line:
+                    # No data available in this tick, sleep briefly and keep looping
+                    time.sleep(0.01)
                     continue
                 
                 # Parse values: weight, distance, ax, ay, az
