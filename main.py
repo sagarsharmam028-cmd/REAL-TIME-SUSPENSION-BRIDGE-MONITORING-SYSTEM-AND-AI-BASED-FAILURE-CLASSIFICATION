@@ -1,9 +1,16 @@
+import sys
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
+
 from live_data import get_live_data
 from features import extract_features_live
 from model import train_model, predict, load_model, list_models
 from simulation.twin import run_simulation
 import csv
 import os
+import time
 
 # 🔹 Buffer for time-series analysis
 buffer = []
@@ -44,6 +51,7 @@ while True:
         # ✅ Step 1: Get live data
         data = get_live_data()
         if data is None:
+            time.sleep(0.02)
             continue
 
         # ✅ Step 2: Update buffer

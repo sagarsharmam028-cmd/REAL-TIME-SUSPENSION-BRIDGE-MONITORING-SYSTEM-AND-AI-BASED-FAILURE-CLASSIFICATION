@@ -1,3 +1,9 @@
+import sys
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
+
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, StratifiedKFold, cross_validate
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, roc_auc_score
@@ -10,6 +16,8 @@ import os
 import pickle
 import json
 from datetime import datetime
+import matplotlib
+matplotlib.use('Agg')  # Headless backend to prevent Tkinter GUI thread crashes
 import matplotlib.pyplot as plt
 import warnings
 warnings.filterwarnings('ignore')
@@ -33,7 +41,9 @@ MODEL_FEATURES = [
     "max_deflection",
     "vibration_std",
     "vibration_max",
-    "deflection_rate"
+    "deflection_rate",
+    "dominant_frequency",
+    "vibration_spectral_energy"
 ]
 
 
@@ -87,7 +97,11 @@ def train_model(csv_path="dataset.csv", model_type="rf"):
             return model, False
 
         # 🔥 Features & Labels
-        X = df[MODEL_FEATURES]
+        # Dynamically select only features that are present in the dataset (provides backward compatibility for old datasets)
+        features_to_use = [f for f in MODEL_FEATURES if f in df.columns]
+        print(f"ℹ️  Features selected for training ({len(features_to_use)}): {features_to_use}")
+        
+        X = df[features_to_use]
         y = df["label"]
 
         # 📊 Class distribution
@@ -183,7 +197,7 @@ def train_model(csv_path="dataset.csv", model_type="rf"):
         # Store scaler and additional info for prediction
         model.scaler = scaler
         model.model_type = model_type
-        model.feature_names = MODEL_FEATURES
+        model.feature_names = features_to_use
         
         # 💾 Save model to disk
         metrics = {
@@ -213,13 +227,22 @@ def predict(model, features, is_trained):
         return None, 0.0
 
     try:
-        X = np.array([[
-            features["mean_deflection"],
-            features["max_deflection"],
-            features["vibration_std"],
-            features["vibration_max"],
-            features["deflection_rate"]
-        ]])
+        # Dynamically determine features that the model was trained on
+        if hasattr(model, 'feature_names'):
+            features_to_use = model.feature_names
+        else:
+            # Fallback to the original 5 features for legacy models
+            features_to_use = [
+                "mean_deflection",
+                "max_deflection",
+                "vibration_std",
+                "vibration_max",
+                "deflection_rate"
+            ]
+
+        # Construct feature vector in the precise order expected by the model
+        X_list = [features[f] for f in features_to_use]
+        X = np.array([X_list])
 
         # ✅ Use stored scaler for consistent feature normalization
         if hasattr(model, 'scaler'):

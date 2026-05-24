@@ -2,6 +2,9 @@
 #include <Wire.h>
 #include <MPU6050.h>
 
+// 🔹 BIDIRECTIONAL CONTROL ALERT ACTUATION
+#define ALERT_LED 2  // Built-in blue LED on ESP32 (or connect to pin 2 relay/buzzer)
+
 // 🔹 LOAD CELL
 #define DT 4
 #define SCK 5
@@ -19,16 +22,20 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
 
-  // HX711
+  // Initialize Bidirectional Alert LED
+  pinMode(ALERT_LED, OUTPUT);
+  digitalWrite(ALERT_LED, LOW); // Start off
+
+  // HX711 Load Cell
   scale.begin(DT, SCK);
   scale.set_scale(calibration_factor);
   scale.tare();
 
-  // Ultrasonic
+  // Ultrasonic Distance Sensor
   pinMode(TRIG, OUTPUT);
   pinMode(ECHO, INPUT);
 
-  // MPU6050
+  // MPU6050 Gyro/Accelerometer
   Wire.begin(21, 22);
   mpu.initialize();
 
@@ -36,8 +43,18 @@ void setup() {
 }
 
 void loop() {
+  // 🔹 Closed-Loop Bidirectional Feedback Actuator
+  // Checks for commands written by the Digital Twin over the active Serial port
+  if (Serial.available() > 0) {
+    char cmd = Serial.read();
+    if (cmd == 'D') {
+      digitalWrite(ALERT_LED, HIGH);  // Turn ON physical alert siren / built-in LED (DANGER)
+    } else if (cmd == 'S') {
+      digitalWrite(ALERT_LED, LOW);   // Turn OFF (SAFE / WARNING)
+    }
+  }
 
-  // 🔹 LOAD CELL (stable)
+  // 🔹 LOAD CELL (stable filtering)
   float rawWeight = scale.get_units(20);
 
   if (abs(rawWeight) < 5) rawWeight = 0;
@@ -45,7 +62,7 @@ void loop() {
   static float weight = 0;
   weight = 0.8 * weight + 0.2 * rawWeight;
 
-  // 🔹 ULTRASONIC (stable)
+  // 🔹 ULTRASONIC (stable distance capture)
   digitalWrite(TRIG, LOW);
   delayMicroseconds(2);
   digitalWrite(TRIG, HIGH);
@@ -61,7 +78,7 @@ void loop() {
   int16_t ax, ay, az;
   mpu.getAcceleration(&ax, &ay, &az);
 
-  // 🔥 OUTPUT FOR AI (CSV FORMAT)
+  // 🔥 OUTPUT FOR DIGITAL TWIN & AI (CSV FORMAT)
   Serial.print(weight);
   Serial.print(",");
   Serial.print(distance);
