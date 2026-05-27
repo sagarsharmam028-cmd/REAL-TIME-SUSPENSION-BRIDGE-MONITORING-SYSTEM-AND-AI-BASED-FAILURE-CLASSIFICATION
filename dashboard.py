@@ -30,6 +30,7 @@ from live_data import get_live_data, serial_port_name, send_serial_command
 from features import extract_features_live
 from model import load_model, predict, list_models, MODEL_FEATURES
 from simulation.twin import run_simulation
+import alert_logger
 
 # ============================================
 # PERSISTENT STORAGE & CALIBRATION CACHING
@@ -435,7 +436,7 @@ def draw_bridge_3d_html(deflection, load, status, elements_data_json):
 # ============================================
 # MAIN DASHBOARD TABS
 # ============================================
-tab1, tab2, tab3 = st.tabs(["🔴 Real-Time Digital Twin", "📈 ML Model Registry", "📊 Raw Signal Spectrum"])
+tab1, tab2, tab3, tab4 = st.tabs(["🔴 Real-Time Digital Twin", "📈 ML Model Registry", "📊 Raw Signal Spectrum", "📋 Alert History"])
 
 with tab1:
     # 2x2 grid layout inside Live tab
@@ -478,6 +479,26 @@ with tab3:
         
     spectrum_chart_placeholder = st.empty()
 
+with tab4:
+    st.subheader("📋 Structural Alert Event Log")
+    st.caption("Records every structural state transition this session (SAFE ↔ WARNING ↔ DANGER). Cleared on page refresh.")
+
+    # ── Top control bar ──
+    alert_ctrl_col1, alert_ctrl_col2, alert_ctrl_col3 = st.columns([1, 1, 2])
+    with alert_ctrl_col1:
+        alert_count_badge = st.empty()
+    with alert_ctrl_col2:
+        clear_log_btn = st.button("🗑️ Clear Log", help="Wipe all events from the current session log.")
+        if clear_log_btn:
+            alert_logger.clear()
+            st.toast("Alert log cleared.", icon="🗑️")
+    with alert_ctrl_col3:
+        download_placeholder = st.empty()
+
+    # ── Live alert table ──
+    alert_table_placeholder = st.empty()
+    alert_legend_placeholder = st.empty()
+
 with tab2:
     st.header("📦 Saved Production Models Analytics")
     st.write("Historical versions tracked and registered in `/models/registry.json`")
@@ -504,6 +525,77 @@ with tab2:
                 df_models = pd.DataFrame(metrics_data)
                 st.dataframe(df_models, use_container_width=True)
                 st.success("✅ Model version history read successfully.")
+
+                # ── Feature B: Accuracy & F1 Trend Chart ──────────────────────────────
+                st.subheader("📈 Model Performance Trend")
+                st.caption("Accuracy and Weighted F1 score across all registered model versions.")
+
+                trend_versions  = [e['version'].replace('model_v', 'v') for e in registry['versions']]
+                trend_accuracy  = [e['metrics']['accuracy']            for e in registry['versions']]
+                trend_f1        = [e['metrics']['f1_weighted']         for e in registry['versions']]
+                trend_samples   = [e['metrics']['samples_trained']     for e in registry['versions']]
+
+                fig_trend = go.Figure()
+
+                # Accuracy line
+                fig_trend.add_trace(go.Scatter(
+                    x=trend_versions,
+                    y=[a * 100 for a in trend_accuracy],
+                    name="Accuracy (%)",
+                    mode="lines+markers",
+                    line=dict(color="#00d2ff", width=3, shape="spline"),
+                    marker=dict(size=8, symbol="circle"),
+                    hovertemplate="<b>%{x}</b><br>Accuracy: %{y:.2f}%<br><extra></extra>"
+                ))
+
+                # F1 line
+                fig_trend.add_trace(go.Scatter(
+                    x=trend_versions,
+                    y=[f * 100 for f in trend_f1],
+                    name="Weighted F1 (%)",
+                    mode="lines+markers",
+                    line=dict(color="#9b51e0", width=3, dash="dash", shape="spline"),
+                    marker=dict(size=8, symbol="diamond"),
+                    hovertemplate="<b>%{x}</b><br>F1: %{y:.2f}%<br><extra></extra>"
+                ))
+
+                # Training size as bar (secondary y-axis)
+                fig_trend.add_trace(go.Bar(
+                    x=trend_versions,
+                    y=trend_samples,
+                    name="Training Samples",
+                    yaxis="y2",
+                    marker_color="rgba(255, 193, 7, 0.25)",
+                    hovertemplate="<b>%{x}</b><br>Samples: %{y:,}<extra></extra>"
+                ))
+
+                fig_trend.update_layout(
+                    template="plotly_dark",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    height=360,
+                    margin=dict(l=20, r=60, t=30, b=80),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    xaxis=dict(
+                        title="Model Version",
+                        tickangle=-35,
+                        gridcolor="rgba(255,255,255,0.06)"
+                    ),
+                    yaxis=dict(
+                        title="Score (%)",
+                        range=[94, 100],
+                        gridcolor="rgba(255,255,255,0.06)"
+                    ),
+                    yaxis2=dict(
+                        title="Training Samples",
+                        overlaying="y",
+                        side="right",
+                        showgrid=False,
+                        tickformat=","
+                    )
+                )
+                st.plotly_chart(fig_trend, use_container_width=True, key="model_trend_chart")
+                # ──────────────────────────────────────────────────────────────────────
             else:
                 st.info("No legacy models registered in history database.")
     except Exception as e:
@@ -601,6 +693,18 @@ if run_live:
             if current_cmd != st.session_state.last_alert_cmd:
                 send_serial_command(current_cmd)
                 st.session_state.last_alert_cmd = current_cmd
+
+            # ── Feature A: Log state transition to alert event store ──────────────
+            alert_logger.log_event(
+                state=result,
+                confidence=confidence,
+                weight=data["weight"],
+                deflection=features["max_deflection"],
+                vibration=features["vibration_max"],
+                risk_score=risk_score,
+                features=features
+            )
+            # ─────────────────────────────────────────────────────────────────────
                 
             # 5. Maintain rolling chart history (using persistent cached global list)
             plotly_history.append({
@@ -713,6 +817,55 @@ if run_live:
                 yaxis=dict(title="Amplitude Magnitude", gridcolor="rgba(255,255,255,0.06)")
             )
             spectrum_chart_placeholder.plotly_chart(fig_spec, use_container_width=True, key="spectral_vibration_plot")
+
+            # ── Feature A: Refresh Alert History Tab ──────────────────────────────
+            df_alerts = alert_logger.to_dataframe()
+            n_events  = alert_logger.event_count()
+
+            alert_count_badge.metric(
+                "Total Events", n_events,
+                help="Number of state-transition events recorded this session."
+            )
+
+            # Download button (regenerated each tick so it always has current data)
+            download_placeholder.download_button(
+                label="⬇️ Export Log (CSV)",
+                data=alert_logger.to_csv_bytes(),
+                file_name=f"bridge_alerts_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                key=f"dl_btn_{sample_count}"   # unique key per tick avoids Streamlit re-render warning
+            )
+
+            if df_alerts.empty:
+                alert_table_placeholder.info("No state transitions recorded yet. Monitoring active...")
+            else:
+                # Build styled HTML table for color-coded rows
+                def _state_row_style(row):
+                    colors = {"SAFE": "rgba(0,230,118,0.12)", "WARNING": "rgba(255,214,0,0.12)", "DANGER": "rgba(255,23,68,0.12)"}
+                    return [f"background-color: {colors.get(row['state'], 'transparent')}" for _ in row]
+
+                styled = (
+                    df_alerts.style
+                    .apply(_state_row_style, axis=1)
+                    .format({
+                        "confidence":    "{:.1%}",
+                        "weight_kg":     "{:.2f}",
+                        "deflection_cm": "{:.2f}",
+                        "vibration_g":   "{:.4f}",
+                        "risk_score":    "{:.3f}",
+                    }, na_rep="—")
+                )
+                alert_table_placeholder.dataframe(
+                    styled,
+                    use_container_width=True,
+                    height=min(35 * (len(df_alerts) + 1), 400)  # dynamic height, capped at 400px
+                )
+
+            alert_legend_placeholder.caption(
+                "🟢 SAFE &nbsp;|&nbsp; 🟡 WARNING &nbsp;|&nbsp; 🔴 DANGER — "
+                "Only state transitions are recorded (not every sensor tick)."
+            )
+            # ─────────────────────────────────────────────────────────────────────
 
             # Sleep briefly to align with sampling rate
             time.sleep(0.2)
